@@ -86,6 +86,9 @@ test('original Telegram sender validates API response and sends plain text', asy
     await assert.rejects(sendTelegram('test', 'fake-token', 'fake-chat'), /delivery failed/);
     globalThis.fetch = async () => new Response('{"ok":false}', { status: 429 });
     await assert.rejects(sendTelegram('test', 'fake-token', 'fake-chat'), /429/);
+    globalThis.fetch = async () => new Response('OK\r\n', { headers: { 'Content-Type': 'text/plain' } });
+    await assert.rejects(sendTelegram('test', 'fake-token', 'fake-chat'),
+      /Telegram sendMessage \(HTTP 200; Content-Type text\/plain\): expected JSON object/);
   } finally { globalThis.fetch = original; }
 });
 
