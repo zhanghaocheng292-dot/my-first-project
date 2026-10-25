@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectTweets, splitText, beijing, main } from './follow-builders.mjs';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { selectTweets, splitText, beijing, main, formatPostChunks } from './follow-builders.mjs';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sendTelegram } from '../.agents/skills/follow-builders/scripts/deliver.js';
@@ -34,6 +34,23 @@ test('long Chinese/emoji messages split losslessly below Telegram UTF-16 limit',
   assert.ok(chunks.every(c => c.length <= 3500 && !/[\uD800-\uDBFF]$/.test(c)));
 });
 
+test('each long original post part includes identity, time and link without truncating text', () => {
+  const tweet = { name: 'Builder', handle: 'builder',
+    time: Date.parse('2026-10-26T01:00:00Z'), url: 'https://x.com/builder/status/1',
+    text: 'Original English post _*[] 😀\n'.repeat(400) };
+  const parts = formatPostChunks(tweet);
+  assert.ok(parts.length > 1);
+  const bodies = parts.map((part, index) => {
+    assert.ok(part.length <= 3500);
+    assert.match(part, /Builder \(@builder\)/);
+    assert.match(part, /09:00:00/);
+    assert.ok(part.endsWith(`\n原帖链接：${tweet.url}`));
+    return part.split(`原帖内容（${index + 1}/${parts.length}）：\n`)[1]
+      .slice(0, -`\n原帖链接：${tweet.url}`.length);
+  });
+  assert.equal(bodies.join(''), tweet.text);
+});
+
 test('original Telegram sender validates API response and sends plain text', async () => {
   const original = globalThis.fetch;
   try {
@@ -52,14 +69,18 @@ test('original Telegram sender validates API response and sends plain text', asy
   } finally { globalThis.fetch = original; }
 });
 
-test('two complete runs persist state, send Chinese post once and a status notice each time', async () => {
+test('original posts replace pending AI summaries, deduplicate and send short empty/stale notices', async () => {
   const originalFetch = globalThis.fetch;
   const cwd = process.cwd();
   const keys = ['GH_TOKEN', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'GITHUB_REPOSITORY',
     'GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_STEP_SUMMARY'];
   const previous = Object.fromEntries(keys.map(k => [k, process.env[k]]));
   const dir = await mkdtemp(join(tmpdir(), 'follow-builders-test-'));
-  let stored, messages = [], modelCalls = 0;
+  let stored = Buffer.from(JSON.stringify({
+    sent: { 'https://x.com/builder/status/9': Date.now() },
+    pending: { 'https://x.com/builder/status/1': { time: Date.now(), chunks: ['Old AI summary'] } },
+  })).toString('base64');
+  let messages = [], modelCalls = 0;
   const ok = value => ({ ok: true, status: 200, json: async () => value });
   try {
     process.chdir(dir);
@@ -78,7 +99,7 @@ test('two complete runs persist state, send Chinese post once and a status notic
       if (url.endsWith('/sendMessage')) { messages.push(body.text); return ok({ ok: true, result: { message_id: messages.length } }); }
       if (url.includes('models.github.ai')) {
         modelCalls++;
-        return ok({ choices: [{ message: { content: JSON.stringify({ summaries: ['作者宣布发布一个模型。'] }) } }] });
+        throw new Error('AI requests must never run');
       }
       if (url.includes('/git/ref/')) return ok({ ref: 'exists' });
       if (options.method === 'PUT') { stored = body.content; return ok({ content: { sha: 'test' } }); }
@@ -88,11 +109,29 @@ test('two complete runs persist state, send Chinese post once and a status notic
     await main();
     process.env.GITHUB_RUN_ID = 'second';
     await main();
-    assert.equal(modelCalls, 1);
+    assert.equal(modelCalls, 0);
     assert.equal(messages.length, 3);
-    assert.equal(messages.filter(m => m.includes('AI 总结：')).length, 1);
+    const posts = messages.filter(m => m.includes('原帖内容（'));
+    assert.equal(posts.length, 1);
+    assert.match(posts[0], /Builder \(@builder\)/);
+    assert.match(posts[0], /发布时间（北京时间）：/);
+    assert.match(posts[0], /We released a model/);
+    assert.match(posts[0], /原帖链接：https:\/\/x\.com\/builder\/status\/1/);
+    assert.ok(messages.every(m => !m.includes('AI 总结') && !m.includes('Old AI summary')));
     assert.match(messages[2], /当前无可推送的新动态/);
-    assert.ok(JSON.parse(Buffer.from(stored, 'base64')).sent['https://x.com/builder/status/1']);
+    assert.ok(messages[2].length < 400);
+    const state = JSON.parse(Buffer.from(stored, 'base64'));
+    assert.ok(state.sent['https://x.com/builder/status/1']);
+    assert.ok(state.sent['https://x.com/builder/status/9'], 'existing sent URL history preserved');
+    const prepared = JSON.parse(await readFile('work/follow-builders/prepared.json', 'utf8'));
+    prepared.stats.feedGeneratedAt = new Date(Date.now() - 2 * 86400000).toISOString();
+    await writeFile('work/follow-builders/prepared.json', JSON.stringify(prepared));
+    process.env.GITHUB_RUN_ID = 'stale';
+    await main();
+    assert.equal(messages.length, 4);
+    assert.match(messages[3], /中央 feed 已超过 24 小时未更新/);
+    assert.ok(messages[3].length < 400);
+    assert.equal(modelCalls, 0);
   } finally {
     globalThis.fetch = originalFetch;
     process.chdir(cwd);

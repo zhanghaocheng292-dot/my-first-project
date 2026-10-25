@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: write # Dedicated follow-builders-state branch only; never writes main.
-  models: read # GitHub Models free quota; no additional API secret.+
 concurrency:
   group: follow-builders-telegram
   cancel-in-progress: false
@@ -51,7 +50,7 @@ jobs:
         run: |
           mkdir -p work/follow-builders
           timeout 180 node .agents/skills/follow-builders/scripts/prepare-digest.js > work/follow-builders/prepared.json
-      - name: Summarize and deliver
+      - name: Deliver original posts
         env:
           GH_TOKEN: ${{ github.token }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
