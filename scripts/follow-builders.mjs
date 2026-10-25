@@ -2,6 +2,7 @@
 import { readFile, appendFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { sendTelegram } from '../.agents/skills/follow-builders/scripts/deliver.js';
+import { readJSONResponse } from '../.agents/skills/follow-builders/scripts/json-response.js';
 
 const DAY = 86400000;
 export const beijing = ms => new Date(ms).toLocaleString('zh-CN', {
@@ -61,7 +62,7 @@ async function stateStore() {
       ...(body ? { body: JSON.stringify(body) } : {}) });
     if (res.status === 404 && method === 'GET') return null;
     if (!res.ok) throw new Error(`State API failed (HTTP ${res.status}); stop before further delivery`);
-    return res.json();
+    return readJSONResponse(res, `GitHub state API ${method} ${path.split('?')[0]}`);
   }
   const branch = 'follow-builders-state';
   if (!await api(`/git/ref/heads/${branch}`)) {
@@ -95,7 +96,7 @@ async function summarize(tweets, prompts) {
         ] }),
     });
     if (!res.ok) throw new Error(`GitHub Models failed (HTTP ${res.status}); check Models access/free quota`);
-    const response = await res.json();
+    const response = await readJSONResponse(res, 'GitHub Models POST /inference/chat/completions');
     let result;
     try { result = JSON.parse(response.choices[0].message.content).summaries; }
     catch { throw new Error('Invalid model JSON; nothing from this run has been sent'); }
@@ -117,7 +118,7 @@ export async function main() {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID }),
   });
-  const info = await chat.json();
+  const info = await readJSONResponse(chat, 'Telegram getChat');
   if (!chat.ok || !info.ok || info.result?.type !== 'private') throw new Error('Telegram private chat validation failed');
   const prepared = JSON.parse(await readFile('work/follow-builders/prepared.json', 'utf8'));
   if (prepared.status !== 'ok' || prepared.errors?.some(e => /tweet feed/i.test(e))) {

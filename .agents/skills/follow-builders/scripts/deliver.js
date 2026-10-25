@@ -25,6 +25,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { config as loadEnv } from 'dotenv';
+import { readJSONResponse } from './json-response.js';
 
 // -- Constants ---------------------------------------------------------------
 
@@ -96,7 +97,7 @@ export async function sendTelegram(text, botToken, chatId) {
       }
     );
 
-    const result = await res.json();
+    const result = await readJSONResponse(res, 'Telegram sendMessage');
     if (!res.ok || !result.ok || !result.result?.message_id) {
       throw new Error(`Telegram delivery failed (HTTP ${res.status})`);
     }
