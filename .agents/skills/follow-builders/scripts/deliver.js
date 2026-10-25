@@ -63,7 +63,7 @@ async function getDigestText() {
 // Sends the digest via Telegram Bot API.
 // The user creates a bot via @BotFather and provides the token.
 // The chat ID is obtained when the user sends their first message to the bot.
-async function sendTelegram(text, botToken, chatId) {
+export async function sendTelegram(text, botToken, chatId) {
   // Telegram has a 4096 character limit per message.
   // If the digest is longer, we split it into chunks.
   const MAX_LEN = 4000;
@@ -86,35 +86,19 @@ async function sendTelegram(text, botToken, chatId) {
       `https://api.telegram.org/bot${botToken}/sendMessage`,
       {
         method: 'POST',
+        signal: AbortSignal.timeout(60000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
           text: chunk,
-          parse_mode: 'Markdown',
           disable_web_page_preview: true
         })
       }
     );
 
-    if (!res.ok) {
-      const err = await res.json();
-      // If Markdown parsing fails, retry without parse_mode
-      if (err.description && err.description.includes("can't parse")) {
-        await fetch(
-          `https://api.telegram.org/bot${botToken}/sendMessage`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: chatId,
-              text: chunk,
-              disable_web_page_preview: true
-            })
-          }
-        );
-      } else {
-        throw new Error(`Telegram API error: ${err.description}`);
-      }
+    const result = await res.json();
+    if (!res.ok || !result.ok || !result.result?.message_id) {
+      throw new Error(`Telegram delivery failed (HTTP ${res.status})`);
     }
 
     // Small delay between chunks to avoid rate limiting
@@ -214,4 +198,4 @@ async function main() {
   }
 }
 
-main();
+if (process.argv[1] && new URL(import.meta.url).pathname === process.argv[1]) main();
