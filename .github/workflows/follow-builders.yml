@@ -1,0 +1,59 @@
+name: Follow Builders Telegram Digest
+
+on:
+  schedule:
+    - cron: '0 1 * * *' # 09:00 Asia/Shanghai; GitHub may delay scheduled jobs.
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/follow-builders.yml'
+      - 'scripts/follow-builders*'
+      - '.agents/skills/follow-builders/scripts/**'
+
+permissions:
+  contents: write # Dedicated follow-builders-state branch only; never writes main.
+  models: read # GitHub Models free quota; no additional API secret.+
+concurrency:
+  group: follow-builders-telegram
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix .agents/skills/follow-builders/scripts --ignore-scripts --no-audit --no-fund
+      - run: node --test scripts/follow-builders.test.mjs
+  digest:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_USE_ENV_PROXY: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: .agents/skills/follow-builders/scripts/package-lock.json
+      - name: Install original skill dependencies
+        run: npm ci --prefix .agents/skills/follow-builders/scripts --ignore-scripts --no-audit --no-fund
+      - name: Verify digest logic
+        run: node --test scripts/follow-builders.test.mjs
+      - name: Prepare central feed with original script
+        run: |
+          mkdir -p work/follow-builders
+          timeout 180 node .agents/skills/follow-builders/scripts/prepare-digest.js > work/follow-builders/prepared.json
+      - name: Summarize and deliver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node scripts/follow-builders.mjs
