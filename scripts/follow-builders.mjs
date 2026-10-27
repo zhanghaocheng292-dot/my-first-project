@@ -61,7 +61,8 @@ async function stateStore() {
       ...(body ? { body: JSON.stringify(body) } : {}) });
     if (res.status === 404 && method === 'GET') return null;
     if (!res.ok) throw new Error(`State API failed (HTTP ${res.status}); stop before further delivery`);
-    return res.json();
+    try { return await res.json(); }
+    catch { throw new Error(`GitHub state API returned non-JSON (HTTP ${res.status})`); }
   }
   const branch = 'follow-builders-state';
   if (!await api(`/git/ref/heads/${branch}`)) {
@@ -99,7 +100,9 @@ export async function main() {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: process.env.TELEGRAM_CHAT_ID }),
   });
-  const info = await chat.json();
+  let info;
+  try { info = await chat.json(); }
+  catch { throw new Error(`Telegram getChat returned non-JSON (HTTP ${chat.status})`); }
   if (!chat.ok || !info.ok || info.result?.type !== 'private') throw new Error('Telegram private chat validation failed');
   const prepared = JSON.parse(await readFile('work/follow-builders/prepared.json', 'utf8'));
   if (prepared.status !== 'ok' || prepared.errors?.some(e => /tweet feed/i.test(e))) {
