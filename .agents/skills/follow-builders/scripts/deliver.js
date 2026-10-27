@@ -96,7 +96,9 @@ export async function sendTelegram(text, botToken, chatId) {
       }
     );
 
-    const result = await res.json();
+    let result;
+    try { result = await res.json(); }
+    catch { throw new Error(`Telegram sendMessage returned non-JSON (HTTP ${res.status})`); }
     if (!res.ok || !result.ok || !result.result?.message_id) {
       throw new Error(`Telegram delivery failed (HTTP ${res.status})`);
     }
